@@ -6,43 +6,65 @@ import (
     "strings"
     "regexp"
     "strconv"
+    "bytes"
     "fmt"
 )
 
+var parser = regexp.MustCompile(`([\w\-\_\.\+]+)\s-\s(.+)$`)
+
 func main() {
   pattern := os.Args[1]
-  cmd := exec.Command("apt-cache", "search", pattern)
-  out, err := cmd.Output()
-  if err != nil {
-    panic(err)
-  }
+
   matches := 0
-  for _,line := range(strings.Split(string(out), "\n")) {
-    if Parse(line, pattern) {
-      matches += 1
-    }
+
+  ch := Parse(pattern, Search(pattern))
+  for line := range ch {
+    fmt.Println(line)
+    matches += 1
   }
+
   fmt.Println("Found "+strconv.Itoa(matches)+" matches")
 }
 
-func Parse(pkgdesc string, pattern string) bool {
-  var parser = regexp.MustCompile(`([\w\-\_\.\+]+)\s-\s(.+)$`)
-  data := parser.FindStringSubmatch(pkgdesc)
-  if len(data) > 0 {
-    pkgname := data[1]
-    pattern_parser := regexp.MustCompile(regexp.QuoteMeta(pattern))
-    if pattern_parser.MatchString(pkgname) {
-       return Show(pkgname)
+func Search(pattern string) <-chan string {
+    cmd := exec.Command("apt-cache", "search", pattern)
+    results, err := cmd.Output()
+    if err != nil {
+        panic(err)
     }
-  }
-  return false
+
+    out := make(chan string)
+    go func() {
+        for _,line := range(strings.Split(string(results), "\n")) {
+             out <- line
+        }
+        close(out)
+    }()
+    return out
 }
 
+func Parse(pattern string, in <-chan string) <-chan string {
+    out := make(chan string)
+    go func() {
+        for pkgdesc := range in {
+            data := parser.FindStringSubmatch(pkgdesc)
+            if len(data) > 0 {
+                pkgname := data[1]
+                pattern_parser := regexp.MustCompile(regexp.QuoteMeta(pattern))
+                if pattern_parser.MatchString(pkgname) {
+                    out <- Show(pkgname)
+                }
+            }
+        }
+        close(out)
+    }()
+    return out
+}
 
-func Show(pkg string) bool {
+func Show(pkg string) string {
   out, err := exec.Command("apt-cache", "show", pkg).Output()
   if err != nil {
-    return false
+    return ""
   }
   result := make(map[string] string, 0)
   parser := regexp.MustCompile(`([\w\-]+):\s(.+)$`)
@@ -54,24 +76,41 @@ func Show(pkg string) bool {
   }
   installed := isInstalled(pkg)
 
-  fmt.Print(" \033[92m*\033[00m "+result["section"]+"/\033[01m"+result["package"]+"\033[00m  ")
+  var buffer bytes.Buffer
+
+  buffer.WriteString(" \033[92m*\033[00m ")
+  buffer.WriteString(result["section"])
+  buffer.WriteString("/\033[01m")
+  buffer.WriteString(result["package"])
+  buffer.WriteString("\033[00m  ")
   if installed {
-    fmt.Println("[\033[01;32mINSTALLED\033[00m]")
+    buffer.WriteString("[\033[01;32mINSTALLED\033[00m]\n")
   } else {
-    fmt.Println()
+    buffer.WriteString("\n")
   }
 
-  fmt.Println("     \033[32mVersion:\033[00m \033[96m"+result["version"]+"\033[00m")
+  buffer.WriteString("     \033[32mVersion:\033[00m \033[96m")
+  buffer.WriteString(result["version"])
+  buffer.WriteString("\033[00m\n")
+
   if len(result["homepage"]) > 0 {
-    fmt.Println("     \033[32mHomepage:\033[00m "+result["homepage"])
+    buffer.WriteString("     \033[32mHomepage:\033[00m ")
+    buffer.WriteString(result["homepage"])
+    buffer.WriteString("\n")
   }
-  fmt.Println("     \033[32mDescription:\033[00m "+result["description-en"])
+
+  buffer.WriteString("     \033[32mDescription:\033[00m ")
+  buffer.WriteString(result["description-en"])
+  buffer.WriteString("\n")
 
   size, _ := strconv.Atoi(result["size"])
   str := strconv.Itoa((size + 1023) / 1024)
-  fmt.Println("     \033[32mDownload size:\033[00m "+ str +" KiB")
-  fmt.Println()
-  return true
+
+  buffer.WriteString("     \033[32mDownload size:\033[00m ")
+  buffer.WriteString(str)
+  buffer.WriteString(" KiB\n")
+
+  return buffer.String()
 }
 
 func isInstalled(pkg string) bool {
