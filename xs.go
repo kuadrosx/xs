@@ -2,8 +2,8 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -12,8 +12,18 @@ import (
 
 var parser = regexp.MustCompile(`([\w\-\_\.\+]+)\s-\s(.+)$`)
 
+var installed bool
+var noInstalled bool
+
+func init() {
+	flag.BoolVar(&installed, "installed", false, "Show only installed packages")
+	flag.BoolVar(&noInstalled, "no-installed", false, "Show only no installed packages")
+}
+
 func main() {
-	pattern := os.Args[1]
+	flag.Parse()
+
+	pattern := flag.Args()[0]
 
 	ch := Show(PkgInfo(Parse(pattern, Search(pattern))))
 	matches := 0
@@ -88,6 +98,11 @@ func Show(in <-chan map[string]string) <-chan string {
 
 	go func() {
 		for result := range in {
+			if installed && result["installed"] != "y" {
+				continue
+			} else if noInstalled && result["installed"] == "y" {
+				continue
+			}
 			var buffer bytes.Buffer
 			buffer.WriteString(" \033[92m*\033[00m ")
 			buffer.WriteString(result["section"])
